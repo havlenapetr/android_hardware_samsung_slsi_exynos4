@@ -600,7 +600,7 @@ bool SecHdmi::connect(void)
                     }
                     else mHdmiOutputMode = HDMI_OUTPUT_MODE_YCBCR;
 
-                    if(resolution && (vout_mode != HDMI_OUTPUT_MODE_YCBCR))  {       // 1080P default value
+                    if(resolution)  {       // 1080P default value
                         mHdmiResolutionValue    = 1080960;
                         mHdmiPresetId           = V4L2_DV_1080P60;
                         mHdmiStdId              = V4L2_STD_1080P_60;
