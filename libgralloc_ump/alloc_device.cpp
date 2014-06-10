@@ -80,7 +80,8 @@
 #define OMX_COLOR_FormatYUV420SemiPlanar 0x15
 #endif
 
-#define PFX_NODE_MEM   "/dev/exynos-mem"
+#define PFX_NODE_MEM   "/dev/fimg2d"
+#define MALI_DDK_VERSION_R3P1 0
 static int gMemfd = 0;
 
 bool ion_dev_open = true;
@@ -175,6 +176,8 @@ static int gralloc_alloc_buffer(alloc_device_t* dev, size_t size, int usage,
         int priv_alloc_flag = private_handle_t::PRIV_FLAGS_USES_UMP;
 
         if (usage & GRALLOC_USAGE_HW_ION) {
+            ALOGE("[XH] usage = GRALLOC_USAGE_HW_ION!");
+#if MALI_DDK_VERSION_R3P1
             if (!ion_dev_open) {
                 ALOGE("ERROR, failed to open ion");
                 return -1;
@@ -207,6 +210,9 @@ static int gralloc_alloc_buffer(alloc_device_t* dev, size_t size, int usage,
                 ion_free(ion_fd);
                 return -1;
             }
+#else
+            ALOGE("ERROR, not support ump_ref_drv_ion_import()");
+#endif
         }
 #ifdef SAMSUNG_EXYNOS_CACHE_UMP
         else if ((usage&GRALLOC_USAGE_SW_READ_MASK) == GRALLOC_USAGE_SW_READ_OFTEN)

@@ -55,7 +55,7 @@ static pthread_mutex_t sMapLock = PTHREAD_MUTEX_INITIALIZER;
 static int gSdkVersion = 0;
 static int s_ump_is_open = 0;
 static int gMemfd = 0;
-#define PFX_NODE_MEM   "/dev/exynos-mem"
+#define PFX_NODE_MEM   "/dev/fimg2d"
 
 /* we need this for now because pmem cannot mmap at an offset */
 #define PMEM_HACK   1
