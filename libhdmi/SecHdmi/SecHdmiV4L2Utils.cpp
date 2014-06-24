@@ -97,11 +97,16 @@ int check_default_resolution(void)
 
 	// read ok
 	if(nrd)	{
-		if(!strncmp(buf, "1", 1))		{
-		    LOGI("%s : status == 1", DEFAULT_RESOLUTION_FILE);
+		if(!strncmp(buf, "3", 1))		{
+		    LOGI("%s : 1080P", DEFAULT_RESOLUTION_FILE);
+			return	3;	// wakeup
+        } else if(!strncmp(buf, "2", 1))		{
+		    LOGI("%s : 720P", DEFAULT_RESOLUTION_FILE);
+			return	2;	// wakeup
+        } else if(!strncmp(buf, "1", 1))		{
+		    LOGI("%s : 480P", DEFAULT_RESOLUTION_FILE);
 			return	1;	// wakeup
-		}
-		else	{
+		} else {
 			LOGI("%s : status == 0", DEFAULT_RESOLUTION_FILE);
 			return	0;	// suspend
 		}

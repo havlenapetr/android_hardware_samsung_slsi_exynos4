@@ -600,20 +600,26 @@ bool SecHdmi::connect(void)
                     }
                     else mHdmiOutputMode = HDMI_OUTPUT_MODE_YCBCR;
 
-                    if(resolution)  {       // 1080P default value
+                    if(resolution == 3)  {       // 1080P default value
                         mHdmiResolutionValue    = 1080960;
                         mHdmiPresetId           = V4L2_DV_1080P60;
                         mHdmiStdId              = V4L2_STD_1080P_60;
                         mDisplayWidth           = 1920;
                         mDisplayHeight          = 1080;
                         mCompositeStd           = COMPOSITE_STD_NTSC_M;
-                    }
-                    else    {               // 720P default value
+                    } else if (resolution == 2 || resolution == 0) {               // 720P default value
                         mHdmiResolutionValue    = 720960;
                         mHdmiPresetId           = V4L2_DV_720P60;
                         mHdmiStdId              = V4L2_STD_720P_60;
                         mDisplayWidth           = 1280;
                         mDisplayHeight          = 720;
+                        mCompositeStd           = COMPOSITE_STD_NTSC_M;
+                    } else {               // 480P default value
+                        mHdmiResolutionValue    = 4809601;
+                        mHdmiPresetId           = V4L2_DV_480P60;
+                        mHdmiStdId              = V4L2_STD_480P_60_4_3;
+                        mDisplayWidth           = 800;
+                        mDisplayHeight          = 480;
                         mCompositeStd           = COMPOSITE_STD_NTSC_M;
                     }
                     LOGE("======= %s::Default HDMI Setup value ======= \n", __func__);
@@ -670,7 +676,6 @@ bool SecHdmi::connect(void)
         display_menu();
 		
 		//codewalker
-#if 0		
 		if((resolution = check_default_resolution()) != -1) {
 			
 			if((vout_mode = check_default_vout_mode()) != -1) {
@@ -679,21 +684,28 @@ bool SecHdmi::connect(void)
 			}
 			else mHdmiOutputMode = HDMI_OUTPUT_MODE_YCBCR;
 
-			if(resolution && !vout_mode)  {       // 1080P default value
+			if(resolution == 3)  {       // 1080P default value
 				mHdmiResolutionValue    = 1080960;
 				mHdmiPresetId           = V4L2_DV_1080P60;
 				mHdmiStdId              = V4L2_STD_1080P_60;
 				mDisplayWidth           = 1920;
 				mDisplayHeight          = 1080;
 				mCompositeStd           = COMPOSITE_STD_NTSC_M;
-			}
-			else    {               // 720P default value
+			} else if (resolution == 2) {               // 720P default value
 				mHdmiResolutionValue    = 720960;
 				mHdmiPresetId           = V4L2_DV_720P60;
 				mHdmiStdId              = V4L2_STD_720P_60;
 				mDisplayWidth           = 1280;
 				mDisplayHeight          = 720;
 				mCompositeStd           = COMPOSITE_STD_NTSC_M;
+            } else if (resolution == 1) {               // 480P default value
+				mHdmiResolutionValue    = 4809601;
+				mHdmiPresetId           = V4L2_DV_480P60;
+				mHdmiStdId              = V4L2_STD_480P_60_4_3;
+				mDisplayWidth           = 800;
+				mDisplayHeight          = 480;
+				mCompositeStd           = COMPOSITE_STD_NTSC_M;
+
 			}
 			
 			struct HDMIVideoParameter video;
@@ -712,7 +724,6 @@ bool SecHdmi::connect(void)
 			if (EDIDVideoResolutionSupport(&video))
 				setHdmiResolution(mHdmiResolutionValue, true);
 		}
-#endif
 
 #endif
     }
