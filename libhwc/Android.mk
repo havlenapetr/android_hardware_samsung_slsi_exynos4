@@ -21,10 +21,10 @@ include $(CLEAR_VARS)
 LOCAL_PRELINK_MODULE := false
 LOCAL_MODULE_PATH := $(TARGET_OUT_SHARED_LIBRARIES)/hw
 LOCAL_SHARED_LIBRARIES := liblog libcutils libEGL \
-			  libGLESv1_CM libhardware_legacy libhardware libion libutils libsync
+			  libGLESv1_CM libhardware_legacy libhardware libsecion libutils libsync
 
 ifeq ($(BOARD_USE_V4L2_ION),true)
-LOCAL_SHARED_LIBRARIES += libion
+LOCAL_SHARED_LIBRARIES += libsecion
 endif
 
 LOCAL_C_INCLUDES := \

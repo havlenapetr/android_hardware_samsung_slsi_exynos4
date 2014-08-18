@@ -21,6 +21,7 @@ common_exynos4_dirs := \
     libhdmi          \
     libfimc          \
     libhwc    \
+    libsecion \
     libhwconverter   \
     libcamera        \
     smdk_common      \
