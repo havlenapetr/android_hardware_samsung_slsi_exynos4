@@ -600,28 +600,47 @@ bool SecHdmi::connect(void)
                     }
                     else mHdmiOutputMode = HDMI_OUTPUT_MODE_YCBCR;
 
-                    if(resolution == 3)  {       // 1080P default value
-                        mHdmiResolutionValue    = 1080960;
-                        mHdmiPresetId           = V4L2_DV_1080P60;
-                        mHdmiStdId              = V4L2_STD_1080P_60;
-                        mDisplayWidth           = 1920;
-                        mDisplayHeight          = 1080;
-                        mCompositeStd           = COMPOSITE_STD_NTSC_M;
-                    } else if (resolution == 2 || resolution == 0) {               // 720P default value
-                        mHdmiResolutionValue    = 720960;
-                        mHdmiPresetId           = V4L2_DV_720P60;
-                        mHdmiStdId              = V4L2_STD_720P_60;
-                        mDisplayWidth           = 1280;
-                        mDisplayHeight          = 720;
-                        mCompositeStd           = COMPOSITE_STD_NTSC_M;
-                    } else {               // 480P default value
-                        mHdmiResolutionValue    = 4809601;
-                        mHdmiPresetId           = V4L2_DV_480P60;
-                        mHdmiStdId              = V4L2_STD_480P_60_4_3;
-                        mDisplayWidth           = 800;
-                        mDisplayHeight          = 480;
-                        mCompositeStd           = COMPOSITE_STD_NTSC_M;
+                    // kernel\arch\arm\mach-exynos\odroid-sysfs.c : odroid_get_hdmi_resolution();
+                    switch(resolution)  {
+                        case    5:
+                            mHdmiResolutionValue    = 1080950;
+                            mHdmiPresetId           = V4L2_DV_1080P50;
+                            mHdmiStdId              = V4L2_STD_1080P_50;
+                            mDisplayWidth           = 1920;
+                            mDisplayHeight          = 1080;
+                            break;
+                        case    4:
+                            mHdmiResolutionValue    = 720950;
+                            mHdmiPresetId           = V4L2_DV_720P50;
+                            mHdmiStdId              = V4L2_STD_720P_50;
+                            mDisplayWidth           = 1280;
+                            mDisplayHeight          = 720;
+                            break;
+                        case    1:
+                            mHdmiResolutionValue    = 4809601;
+                            mHdmiPresetId           = V4L2_DV_480P60;
+                            mHdmiStdId              = V4L2_STD_480P_60_4_3;
+                            mDisplayWidth           = 800;
+                            mDisplayHeight          = 480;
+                            break;
+                        case    3:
+                            mHdmiResolutionValue    = 1080960;
+                            mHdmiPresetId           = V4L2_DV_1080P60;
+                            mHdmiStdId              = V4L2_STD_1080P_60;
+                            mDisplayWidth           = 1920;
+                            mDisplayHeight          = 1080;
+                            break;
+                        case    2:
+                        default :
+                            mHdmiResolutionValue    = 720960;
+                            mHdmiPresetId           = V4L2_DV_720P60;
+                            mHdmiStdId              = V4L2_STD_720P_60;
+                            mDisplayWidth           = 1280;
+                            mDisplayHeight          = 720;
+                            break;
                     }
+                    mCompositeStd = COMPOSITE_STD_NTSC_M;
+
                     LOGE("======= %s::Default HDMI Setup value ======= \n", __func__);
                     LOGE("%s::HDMI Jumper Value(%d) \n"     , __func__, resolution);
                     LOGE("%s::mHdmiOutputMode(%d) \n"       , __func__, mHdmiOutputMode);
