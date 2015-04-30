@@ -232,21 +232,21 @@ static int delay_cnt=0;
                     LOGE("%s::mSecHdmi.connect() fail", __func__);
                     hdmiCableInserted = false;
                 }
-		#if 1  //yqf, 2012-6-18, keep it, first plug in cable with device landscape mode	
-			else{ 
-                   //added yqf, STAR00030984 & update roate value to hdmi after connect->disconnect->connect
-				//codewalker
-				int angle = 0;
-				char value[PROPERTY_VALUE_MAX]; 
-				property_get("ro.sf.hwrotation", value, NULL); 
-				if (value != NULL)
-					angle = atoi(value);
+#if 1  //yqf, 2012-6-18, keep it, first plug in cable with device landscape mode
+                else {
+                       //added yqf, STAR00030984 & update roate value to hdmi after connect->disconnect->connect
+                    //codewalker
+                    int angle = 0;
+                    char value[PROPERTY_VALUE_MAX];
+                    property_get("ro.sf.hwrotation", value, NULL);
+                    if (value != NULL)
+                        angle = atoi(value);
 
-                     mSecHdmi.setUIRotation(globalRotate, angle);
-			if(mSecHdmi.mRotateInfoChange)
-				mSecHdmi.mRotateInfoChange=false;
-                	}
-		#endif		
+                    mSecHdmi.setUIRotation(globalRotate, angle);
+                    if(mSecHdmi.mRotateInfoChange)
+                        mSecHdmi.mRotateInfoChange=false;
+                }
+#endif
             } else {
                 if (mSecHdmi.disconnect() == false)
                     LOGE("%s::mSecHdmi.disconnect() fail", __func__);
@@ -298,16 +298,6 @@ static int delay_cnt=0;
 	
     void SecTVOutService::setHdmiRotate(uint32_t rotVal, uint32_t hwcLayer)
     {
-		//codewalker
-		// 1080p is spec out.
-		char value[PROPERTY_VALUE_MAX]; 
-		property_get("ro.sf.hdmirotation", value, "0"); 
-		if (strcmp(value, "1") == 0)
-			return;
-
-		if (mLCD_height == 1080)
-			return;
-
         Mutex::Autolock _l(mLock);
 		
        rotVal=globalRotate; //added yqf
