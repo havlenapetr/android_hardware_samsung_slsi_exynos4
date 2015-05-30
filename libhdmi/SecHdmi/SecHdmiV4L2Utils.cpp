@@ -76,72 +76,66 @@ unsigned int g2d_buf_index              = 0;
 #endif
 
 // add HARDKERNEL
-#define DEFAULT_VOUT_FILE     		"/sys/devices/platform/odroid-sysfs/vout_mode"
+#define DEFAULT_VOUT_FILE             "/sys/devices/platform/odroid-sysfs/vout_mode"
 #define DEFAULT_RESOLUTION_FILE     "/sys/devices/platform/odroid-sysfs/hdmi_resolution"
 
 int check_default_resolution(void)
 {
-	int 	fd, nrd;
-	char	buf[10];
+    int     fd, nrd, res_value = 0;
+    char    buf[10];
 
     if ((fd = open(DEFAULT_RESOLUTION_FILE, O_RDONLY)) < 0) {
         LOGE("drv (%s) open failed!!\n", DEFAULT_RESOLUTION_FILE);
         return  -1;
     }
 
-	memset((void *)buf, 0x00, sizeof(buf));
+    memset((void *)buf, 0x00, sizeof(buf));
 
-	nrd = read(fd, buf, sizeof(buf));
-	
-	close(fd);
+    nrd = read(fd, buf, sizeof(buf));
 
-	// read ok
-	if(nrd)	{
-		if(!strncmp(buf, "3", 1))		{
-		    LOGI("%s : 1080P", DEFAULT_RESOLUTION_FILE);
-			return	3;	// wakeup
-        } else if(!strncmp(buf, "2", 1))		{
-		    LOGI("%s : 720P", DEFAULT_RESOLUTION_FILE);
-			return	2;	// wakeup
-        } else if(!strncmp(buf, "1", 1))		{
-		    LOGI("%s : 480P", DEFAULT_RESOLUTION_FILE);
-			return	1;	// wakeup
-		} else {
-			LOGI("%s : status == 0", DEFAULT_RESOLUTION_FILE);
-			return	0;	// suspend
-		}
-	}
+    close(fd);
+
+    // read ok
+    if(nrd)    {
+        res_value = atoi(buf);
+
+        if(res_value > 5 && res_value < 0)  res_value = 0;
+
+        LOGI("%s : %s", DEFAULT_RESOLUTION_FILE, buf);
+
+        return res_value;
+    }
 
     return -1;
 }
 
 int check_default_vout_mode(void)
 {
-	int 	fd, nrd;
-	char	buf[10];
+    int     fd, nrd;
+    char    buf[10];
 
     if ((fd = open(DEFAULT_VOUT_FILE, O_RDONLY)) < 0) {
         LOGE("drv (%s) open failed!!\n", DEFAULT_VOUT_FILE);
         return  -1;
     }
 
-	memset((void *)buf, 0x00, sizeof(buf));
+    memset((void *)buf, 0x00, sizeof(buf));
 
-	nrd = read(fd, buf, sizeof(buf));
-	
-	close(fd);
+    nrd = read(fd, buf, sizeof(buf));
 
-	// read ok
-	if(nrd)	{
-		if(!strncmp(buf, "1", 1))		{
-		    LOGI("%s : status == 1", DEFAULT_VOUT_FILE);
-			return	1;
-		}
-		else	{
-			LOGI("%s : status == 0", DEFAULT_VOUT_FILE);
-			return	0;
-		}
-	}
+    close(fd);
+
+    // read ok
+    if(nrd)    {
+        if(!strncmp(buf, "1", 1))        {
+            LOGI("%s : status == 1", DEFAULT_VOUT_FILE);
+            return    1;
+        }
+        else    {
+            LOGI("%s : status == 0", DEFAULT_VOUT_FILE);
+            return    0;
+        }
+    }
 
     return -1;
 }
