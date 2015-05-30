@@ -27,6 +27,8 @@
 
 #define CHECK_GRAPHIC_LAYER_TIME (0)
 
+#define SZ_8K 0x00002000
+
 namespace android {
 
 extern unsigned int output_type;

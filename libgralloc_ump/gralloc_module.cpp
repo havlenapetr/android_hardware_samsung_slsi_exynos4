@@ -480,7 +480,6 @@ struct private_module_t HAL_MODULE_INFO_SYM =
             author: "ARM Ltd.",
             methods: &gralloc_module_methods,
             dso: NULL,
-            reserved : {0,},
         },
         registerBuffer: gralloc_register_buffer,
         unregisterBuffer: gralloc_unregister_buffer,
@@ -488,8 +487,6 @@ struct private_module_t HAL_MODULE_INFO_SYM =
         unlock: gralloc_unlock,
         getphys: gralloc_getphys,
         perform: NULL,
-        lock_ycbcr: NULL,
-        reserved_proc: {0,},
     },
     framebuffer: NULL,
     flags: 0,
@@ -497,5 +494,4 @@ struct private_module_t HAL_MODULE_INFO_SYM =
     bufferMask: 0,
     lock: PTHREAD_MUTEX_INITIALIZER,
     currentBuffer: NULL,
-    ion_client: -1,
 };
