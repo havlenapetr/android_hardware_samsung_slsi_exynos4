@@ -725,11 +725,7 @@ OMX_BOOL SEC_Preprocessor_InputData(OMX_COMPONENTTYPE *pOMXComponent)
         } else {
             previousFrameEOF = OMX_FALSE;
         }
-        if (pVideoDec->bDRMPlayerMode == OMX_TRUE) {
-            flagEOF = OMX_TRUE;
-            checkedSize = checkInputStreamLen;
-        } else if ((pSECComponent->bUseFlagEOF == OMX_TRUE) &&
-           !(inputUseBuffer->nFlags & OMX_BUFFERFLAG_CODECCONFIG)) {
+        if (pSECComponent->bUseFlagEOF == OMX_TRUE) {
             flagEOF = OMX_TRUE;
             checkedSize = checkInputStreamLen;
         } else {
