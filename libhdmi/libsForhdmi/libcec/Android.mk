@@ -27,7 +27,7 @@ LOCAL_C_INCLUDES := \
 	$(LOCAL_PATH) \
 	$(LOCAL_PATH)/../../../include
 
-LOCAL_MODULE := libcec
+LOCAL_MODULE := libcec-exynos
 include $(BUILD_SHARED_LIBRARY)
 
 endif
