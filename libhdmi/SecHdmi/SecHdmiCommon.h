@@ -34,7 +34,7 @@
 #ifdef BOARD_USES_HDMI_EDID
 #define BOARD_USES_EDID
 #endif
-#define BOARD_USES_CEC
+//#define BOARD_USES_CEC
 #if defined(SAMSUNG_EXYNOS4x12)
 //#define SUPPORT_G2D_UI_MODE
 #endif
