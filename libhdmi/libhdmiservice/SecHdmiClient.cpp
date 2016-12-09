@@ -42,7 +42,7 @@ SecHdmiClient::SecHdmiClient()
 {
 	//LOGE("lt::sechdmiclient::getSecTVOutService");
 	g_SecTVOutService = m_getSecTVOutService();
-    mEnable = 0;
+    mEnable = 1;
 }
 
 SecHdmiClient::~SecHdmiClient()
@@ -125,8 +125,8 @@ void SecHdmiClient::setHdmiEnable(uint32_t enable)
 {
     //LOGD("%s HDMI ENABLE: %d\n", __func__, enable);
 
-    if (g_SecTVOutService != 0)
-        mEnable = enable;
+    //if (g_SecTVOutService != 0)
+        //mEnable = enable;
 }
 
 void SecHdmiClient::blit2Hdmi(uint32_t w, uint32_t h,
