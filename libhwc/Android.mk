@@ -31,7 +31,7 @@ LOCAL_C_INCLUDES := \
 	$(LOCAL_PATH)/../include \
 	$(LOCAL_PATH)/../libexynosutils 
 
-LOCAL_SRC_FILES := SecHWCLog.cpp SecHWCUtils.cpp hwc.cpp
+LOCAL_SRC_FILES := SecHWCLog.cpp SecHWCUtils.cpp SecHWC.cpp SecHWCVSync.cpp
 
 LOCAL_C_INCLUDES += $(LOCAL_PATH)/../libfimg
 
@@ -91,3 +91,5 @@ endif
 LOCAL_MODULE := hwcomposer.$(TARGET_BOARD_PLATFORM)
 LOCAL_MODULE_TAGS := optional
 include $(BUILD_SHARED_LIBRARY)
+
+include $(call all-makefiles-under,$(LOCAL_PATH)/test)

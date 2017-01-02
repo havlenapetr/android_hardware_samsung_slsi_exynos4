@@ -172,7 +172,6 @@ struct exynos4_hwc_composer_device_1_t {
     alloc_device_t          *alloc_device;
     framebuffer_device_t   *fb_device;  //framebuffer in FIMD
     const hwc_procs_t       *procs;
-    pthread_t               vsync_thread;
     int                     force_gpu;
 
     int32_t                 xres;
@@ -200,6 +199,7 @@ struct exynos4_hwc_composer_device_1_t {
     int            num_2d_blit_layer;
     uint32_t                  layer_prev_buf[NUM_OF_WIN];
 #if defined(BOARD_USES_HDMI)
+    pthread_t                hpd_thread;
     void                     *hdmi;
 #endif
 

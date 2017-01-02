@@ -34,6 +34,7 @@
 
 #include <EGL/egl.h>
 #include "SecHWCUtils.h"
+#include "SecHWCVSync.h"
 
 #define HWC_REMOVE_DEPRECATED_VERSIONS 1
 
@@ -881,6 +882,7 @@ static int exynos4_set_hdmi(exynos4_hwc_composer_device_1_t *pdev,
                     0, 0,
                     android::SecHdmiClient::HDMI_MODE_UI,
                     0);
+
     return 0;
 }
 
@@ -953,86 +955,10 @@ static int exynos4_eventControl(struct hwc_composer_device_1 *dev, int dpy,
 
     switch (event) {
     case HWC_EVENT_VSYNC:
-        __u32 val = !!enabled;
-        int err = ioctl(pdev->fd, S3CFB_SET_VSYNC_INT, &val);
-        if (err < 0) {
-            ALOGE("vsync ioctl failed");
-            return -errno;
-        }
-
-        return 0;
+        return exynos4_vsync_set_enabled(pdev, !!enabled);
     }
 
     return -EINVAL;
-}
-
-static void handle_vsync_event(struct exynos4_hwc_composer_device_1_t *pdev)
-{
-    if (!pdev->procs)
-        return;
-
-    int err = lseek(pdev->vsync_fd, 0, SEEK_SET);
-    if (err < 0) {
-        ALOGE("error seeking to vsync timestamp: %s", strerror(errno));
-        return;
-    }
-
-    char buf[4096];
-    err = read(pdev->vsync_fd, buf, sizeof(buf));
-    if (err < 0) {
-        ALOGE("error reading vsync timestamp: %s", strerror(errno));
-        return;
-    }
-    buf[sizeof(buf) - 1] = '\0';
-
-    errno = 0;
-    uint64_t timestamp = strtoull(buf, NULL, 0);
-    if (!errno)
-        pdev->procs->vsync(pdev->procs, 0, timestamp);
-}
-
-static void *hwc_vsync_thread(void *data)
-{
-    struct exynos4_hwc_composer_device_1_t *pdev =
-            (struct exynos4_hwc_composer_device_1_t *)data;
-    char uevent_desc[4096];
-    memset(uevent_desc, 0, sizeof(uevent_desc));
-
-    setpriority(PRIO_PROCESS, 0, HAL_PRIORITY_URGENT_DISPLAY);
-
-    uevent_init();
-
-    char temp[4096];
-    int err = read(pdev->vsync_fd, temp, sizeof(temp));
-    if (err < 0) {
-        ALOGE("error reading vsync timestamp: %s", strerror(errno));
-        return NULL;
-    }
-
-    struct pollfd fds[2];
-    fds[0].fd = pdev->vsync_fd;
-    fds[0].events = POLLPRI;
-    fds[1].fd = uevent_get_fd();
-    fds[1].events = POLLIN;
-
-    while (true) {
-        int err = poll(fds, 2, -1);
-
-        if (err > 0) {
-            if (fds[0].revents & POLLPRI) {
-                handle_vsync_event(pdev);
-            }
-            else if (fds[1].revents & POLLIN) {
-            }
-        }
-        else if (err == -1) {
-            if (errno == EINTR)
-                break;
-            ALOGE("error in vsync thread: %s", strerror(errno));
-        }
-    }
-
-    return NULL;
 }
 
 static int exynos4_blank(struct hwc_composer_device_1 *dev, int disp, int blank)
@@ -1175,6 +1101,49 @@ static int exynos4_getDisplayAttributes(struct hwc_composer_device_1 *dev,
     return 0;
 }
 
+static void* exynos4_hpd_thread(void *data) {
+    struct exynos4_hwc_composer_device_1_t *pdev =
+            (struct exynos4_hwc_composer_device_1_t *)data;
+    int state = -1;
+    struct pollfd fds[1];
+    char buf[1];
+
+    fds[0].fd = open(HPD_DEV, O_RDONLY);
+    fds[0].events = POLLRDNORM;
+    if (fds[0].fd < 0) {
+        LOGE("Unable to open HPD device '%s'", strerror(errno));
+        return NULL;
+    }
+
+    while (true) {
+        int err = poll(fds, 1, -1);
+        if (err > 0 && fds[0].revents & POLLRDNORM) {
+            err = read(fds[0].fd, buf, sizeof(buf));
+            if (err < 0) {
+                LOGW("Unable to read hpd state");
+                continue;
+            }
+
+            int cur_state = (int) buf[0];
+            if (cur_state == state) {
+                continue;
+            }
+
+            ALOGD("HPD state changed from '%d' to '%d'", state, cur_state);
+            android::SecTVOutService *hdmi = static_cast<android::SecTVOutService*>(pdev->hdmi);
+            hdmi->setHdmiStatus(cur_state);
+            state = cur_state;
+        } else if (err == -1) {
+            if (errno == EINTR)
+                break;
+            ALOGE("error in hpd thread: %s", strerror(errno));
+        }
+        usleep(200 * 1000);
+    }
+
+    return NULL;
+}
+
 static int exynos4_close(hw_device_t* device);
 
 static int exynos4_open(const struct hw_module_t *module, const char *name,
@@ -1184,7 +1153,7 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
     int refreshRate;
     int sw_fd;
     struct fb_var_screeninfo const* info;
-    struct hwc_win_info_t   *win;
+    struct hwc_win_info_t* win;
 
     if (strcmp(name, HWC_HARDWARE_COMPOSER)) {
         return -EINVAL;
@@ -1235,13 +1204,6 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
           dev->fd, dev->xres, dev->yres, info->width, dev->xdpi / 1000.0,
           info->height, dev->ydpi / 1000.0, refreshRate);
 
-    dev->vsync_fd = open("/sys/devices/platform/exynos4-fb.0/vsync", O_RDONLY);
-    if (dev->vsync_fd < 0) {
-        ALOGI("failed to open vsync attribute, use SW vsync in HWComposer");
-        //ret = dev->vsync_fd;
-        //goto err_hdmi1;
-    }
-
     dev->base.common.tag = HARDWARE_DEVICE_TAG;
     dev->base.common.version = HWC_DEVICE_API_VERSION_1_1;
     dev->base.common.module = const_cast<hw_module_t *>(module);
@@ -1262,6 +1224,12 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
 
     *device = &dev->base.common;
 
+    ret = exynos4_vsync_init(dev);
+    if (ret < 0) {
+        ALOGE("%s:: Failed to init vsync ", __func__, ret);
+        goto err_ioctl;
+    }
+
     //initializing
     memset(&(dev->fimc), 0, sizeof(s5p_fimc_t));
 
@@ -1269,8 +1237,8 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
      for (int i = 0; i < NUM_OF_WIN; i++) {
         if (window_open(&(dev->win[i]), i)  < 0) {
             ALOGE("%s:: Failed to open window %d device ", __func__, i);
-             ret = -EINVAL;
-             goto err_open_overlay;
+            ret = -EINVAL;
+            goto err_open_overlay;
         }
      }
 
@@ -1312,13 +1280,11 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
         goto err_open_overlay;
     }
 
-    if(dev->vsync_fd >= 0){
-        ret = pthread_create(&dev->vsync_thread, NULL, hwc_vsync_thread, dev);
-        if (ret) {
-            ALOGE("failed to start vsync thread: %s", strerror(ret));
-            ret = -ret;
-            goto err_vsync;
-        }
+    ret = pthread_create(&dev->hpd_thread, NULL, exynos4_hpd_thread, dev);
+    if (ret) {
+        ALOGE("failed to start vsync thread: %s", strerror(ret));
+        ret = -ret;
+        goto err_open_overlay;
     }
 
     char value[PROPERTY_VALUE_MAX];
@@ -1326,10 +1292,6 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
     dev->force_gpu = atoi(value);
 
     return 0;
-
-err_vsync:
-    if(dev->vsync_fd >= 0)
-        close(dev->vsync_fd);
     
 err_open_overlay:
     if (destroyFimc(&dev->fimc) < 0)
@@ -1358,15 +1320,19 @@ static int exynos4_close(hw_device_t *device)
 {
     struct exynos4_hwc_composer_device_1_t *dev =
             (struct exynos4_hwc_composer_device_1_t *)device;
-    pthread_kill(dev->vsync_thread, SIGTERM);
-    pthread_join(dev->vsync_thread, NULL);
-    int i;
+
+    pthread_kill(dev->hpd_thread, SIGTERM);
+    pthread_join(dev->hpd_thread, NULL);
+
+    if (exynos4_vsync_deinit(dev) < 0) {
+        ALOGE("%s::exynos4_vsync_deinit fail", __func__);
+    }
 
     if (destroyFimc(&dev->fimc) < 0) {
         ALOGE("%s::destroyFimc fail", __func__);
     }
 
-    for (i = 0; i < NUM_OF_WIN; i++) {
+    for (int i = 0; i < NUM_OF_WIN; i++) {
         if (window_close(&dev->win[i]) < 0)
             ALOGE("%s::window_close() fail", __func__);
     }
@@ -1377,8 +1343,6 @@ static int exynos4_close(hw_device_t *device)
         dev->fd = 0;
     }
     gralloc_close(dev->alloc_device);
-    if(dev->vsync_fd >= 0)
-        close(dev->vsync_fd);
     return 0;
 }
 
