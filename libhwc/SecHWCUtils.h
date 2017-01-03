@@ -199,8 +199,9 @@ struct exynos4_hwc_composer_device_1_t {
     int            num_2d_blit_layer;
     uint32_t                  layer_prev_buf[NUM_OF_WIN];
 #if defined(BOARD_USES_HDMI)
-    pthread_t                hpd_thread;
-    void                     *hdmi;
+    pthread_t                hdmi_hpd_thread;
+    void                    *hdmi;
+    int                      hdmi_hpd;
 #endif
 
     /*

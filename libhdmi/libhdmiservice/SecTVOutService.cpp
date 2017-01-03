@@ -100,8 +100,6 @@ static int delay_cnt=0;
         setLCDsize();
         if (mSecHdmi.create(mLCD_width, mLCD_height) == false)
             LOGE("%s::mSecHdmi.create() fail", __func__);
-        else
-            setHdmiStatus(1);
 
         mHdmiFlushThread = new HDMIFlushThread(this);
     }
