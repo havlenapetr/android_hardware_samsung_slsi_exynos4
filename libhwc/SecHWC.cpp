@@ -61,18 +61,14 @@
 #include "SecHdmiClient.h"
 #include "SecTVOutService.h"
 
-typedef android::SecTVOutService SecTVOutService;
+struct exynos4_hwc_composer_hdmi_device_1_t {
+    exynos4_hwc_composer_device_1_t base;
+    pthread_t                       hdmi_hpd_thread;
+    android::SecTVOutService*       hdmi;
+    int                             hdmi_hpd;
+};
 
-//#define CHECK_EGL_FPS
-#ifdef CHECK_EGL_FPS
-extern void check_fps();
-#endif
-
-static int lcd_width, lcd_height;
-static int prev_usage = 0;
-
-#define CHECK_TIME_DEBUG 0
-#define SUPPORT_AUTO_UI_ROTATE
+static void* exynos4_hpd_thread(void *data);
 #endif // end of BOARD_USES_HDMI
 
 
@@ -544,9 +540,16 @@ static void get_hwc_ui_lay_skipdraw_decision(exynos4_hwc_composer_device_1_t *ct
 }
 #endif
 
-static int exynos4_prepare_fimd(exynos4_hwc_composer_device_1_t *pdev,
+static int exynos4_prepare_fimd(hwc_composer_device_1_t *dev,
         hwc_display_contents_1_t* contents)
 {
+    exynos4_hwc_composer_device_1_t *pdev =
+            (exynos4_hwc_composer_device_1_t *)dev;
+
+    //if geometry is not changed, there is no need to do any work here
+    if (!contents || (!(contents->flags & HWC_GEOMETRY_CHANGED)))
+        return 0;
+
     ALOGV("preparing %u layers for FIMD", contents->numHwLayers);
 
     bool force_fb = pdev->force_gpu;
@@ -572,10 +575,6 @@ static int exynos4_prepare_fimd(exynos4_hwc_composer_device_1_t *pdev,
         pdev->win_virt[i].status = HWC_WIN_FREE;
     }
 #endif
-
-    //if geometry is not changed, there is no need to do any work here
-    if (!contents || (!(contents->flags & HWC_GEOMETRY_CHANGED)))
-        return 0;
 
     //all the windows are free here....
     for (int i = 0 ; i < NUM_OF_WIN; i++) {
@@ -648,17 +647,18 @@ static int exynos4_prepare_fimd(exynos4_hwc_composer_device_1_t *pdev,
     return 0;
 }
 
-static int exynos4_prepare_hdmi(exynos4_hwc_composer_device_1_t *pdev,
+static int exynos4_prepare_hdmi(hwc_composer_device_1_t *dev,
         hwc_display_contents_1_t* contents)
 {
+    exynos4_hwc_composer_hdmi_device_1_t *pdev =
+            (exynos4_hwc_composer_hdmi_device_1_t *)dev;
+
     //if geometry is not changed, there is no need to do any work here
     if (!contents || (!(contents->flags & HWC_GEOMETRY_CHANGED)))
         return 0;
 
 #if defined(BOARD_USES_HDMI)
-    SecTVOutService *hdmi = static_cast<SecTVOutService*>(pdev->hdmi);
-    hdmi->setHdmiStatus(pdev->hdmi_hpd);
-    hdmi->setHdmiHwcLayer(pdev->num_of_hwc_layer);
+    pdev->hdmi->setHdmiHwcLayer(pdev->base.num_of_hwc_layer);
 #endif
 
     return 0;
@@ -672,9 +672,6 @@ static int exynos4_prepare(hwc_composer_device_1_t *dev,
     if (!numDisplays || !displays)
         return 0;
 
-    exynos4_hwc_composer_device_1_t *pdev =
-            (exynos4_hwc_composer_device_1_t *)dev;
-
 #ifdef BOARD_USES_HDMI_PRIMARY
     hwc_display_contents_1_t *fimd_contents = NULL;
     hwc_display_contents_1_t *hdmi_contents = displays[HWC_DISPLAY_PRIMARY];
@@ -684,10 +681,10 @@ static int exynos4_prepare(hwc_composer_device_1_t *dev,
 #endif
 
     if (fimd_contents) {
-        fimd_err = exynos4_prepare_fimd(pdev, fimd_contents);
+        fimd_err = exynos4_prepare_fimd(dev, fimd_contents);
     }
     if (hdmi_contents) {
-        hdmi_err = exynos4_prepare_hdmi(pdev, hdmi_contents);
+        hdmi_err = exynos4_prepare_hdmi(dev, hdmi_contents);
     }
 
     if (fimd_err)
@@ -696,9 +693,12 @@ static int exynos4_prepare(hwc_composer_device_1_t *dev,
     return hdmi_err;
 }
 
-static int exynos4_set_fimd(exynos4_hwc_composer_device_1_t *pdev,
+static int exynos4_set_fimd(hwc_composer_device_1_t *dev,
         hwc_display_contents_1_t* contents)
 {
+    exynos4_hwc_composer_device_1_t *pdev =
+            (exynos4_hwc_composer_device_1_t *)dev;
+
     if (!contents->dpy || !contents->sur)
         return 0;
 
@@ -810,10 +810,12 @@ static int exynos4_set_fimd(exynos4_hwc_composer_device_1_t *pdev,
     return ret;
 }
 
-static int exynos4_set_hdmi(exynos4_hwc_composer_device_1_t *pdev,
+static int exynos4_set_hdmi(hwc_composer_device_1_t *dev,
         hwc_display_contents_1_t* contents)
 {
-    SecTVOutService *hdmi = static_cast<SecTVOutService*>(pdev->hdmi);
+
+    exynos4_hwc_composer_hdmi_device_1_t *pdev =
+            (exynos4_hwc_composer_hdmi_device_1_t *)dev;
 
 #if 0
     if (pdev->num_of_hwc_layer == 1) {
@@ -877,12 +879,12 @@ static int exynos4_set_hdmi(exynos4_hwc_composer_device_1_t *pdev,
     }
 #endif
 
-    hdmi->blit2Hdmi(pdev->xres, pdev->yres,
-                    HAL_PIXEL_FORMAT_BGRA_8888,
-                    0, 0, 0,
-                    0, 0,
-                    android::SecHdmiClient::HDMI_MODE_UI,
-                    0);
+    pdev->hdmi->blit2Hdmi(pdev->base.xres, pdev->base.yres,
+            HAL_PIXEL_FORMAT_BGRA_8888,
+            0, 0, 0,
+            0, 0,
+            android::SecHdmiClient::HDMI_MODE_UI,
+            0);
 
     return 0;
 }
@@ -895,9 +897,6 @@ static int exynos4_set(struct hwc_composer_device_1 *dev,
     if (!numDisplays || !displays)
         return 0;
 
-    exynos4_hwc_composer_device_1_t *pdev =
-            (exynos4_hwc_composer_device_1_t *)dev;
-
 #ifdef BOARD_USES_HDMI_PRIMARY
     hwc_display_contents_1_t *fimd_contents = NULL;
     hwc_display_contents_1_t *hdmi_contents = displays[HWC_DISPLAY_PRIMARY];
@@ -907,10 +906,10 @@ static int exynos4_set(struct hwc_composer_device_1 *dev,
 #endif
 
     if (fimd_contents) {
-        fimd_err = exynos4_set_fimd(pdev, fimd_contents);
+        fimd_err = exynos4_set_fimd(dev, fimd_contents);
     }
-    if (hdmi_contents && pdev->hdmi_hpd) {
-        hdmi_err = exynos4_set_hdmi(pdev, hdmi_contents);
+    if (hdmi_contents) {
+        hdmi_err = exynos4_set_hdmi(dev, hdmi_contents);
     }
 
     if (fimd_err)
@@ -922,9 +921,27 @@ static int exynos4_set(struct hwc_composer_device_1 *dev,
 static void exynos4_registerProcs(struct hwc_composer_device_1* dev,
         hwc_procs_t const* procs)
 {
+#ifdef BOARD_USES_HDMI
+    struct exynos4_hwc_composer_hdmi_device_1_t* pdev =
+            (struct exynos4_hwc_composer_hdmi_device_1_t*)dev;
+    pdev->base.procs = procs;
+
+    int err = pthread_create(&pdev->hdmi_hpd_thread, NULL, exynos4_hpd_thread, pdev);
+    if (err) {
+        ALOGW("unable to start hdmi hpd thread: '%s'", strerror(err));
+    }
+
+#ifndef BOARD_USES_HDMI_PRIMARY
+    if (pdev->procs && pdev->hdmi_hpd) {
+        pdev->procs->hotplug(pdev->procs, HWC_DISPLAY_EXTERNAL, true);
+        //pdev->procs->invalidate(pdev->procs);
+    }
+#endif
+#else
     struct exynos4_hwc_composer_device_1_t* pdev =
             (struct exynos4_hwc_composer_device_1_t*)dev;
     pdev->procs = procs;
+#endif
 }
 
 static int exynos4_query(struct hwc_composer_device_1* dev, int what, int *value)
@@ -1051,6 +1068,14 @@ static int exynos4_getDisplayConfigs(struct hwc_composer_device_1 *dev,
         *numConfigs = 1;
         return 0;
     } else if (disp == HWC_DISPLAY_EXTERNAL) {
+#ifndef BOARD_USES_HDMI_PRIMARY
+        if (!pdev->hdmi_hpd) {
+            return -EINVAL;
+        }
+        configs[0] = 0;
+        *numConfigs = 1;
+        return 0;
+#endif
     }
 
     return -EINVAL;
@@ -1090,10 +1115,8 @@ static int exynos4_getDisplayAttributes(struct hwc_composer_device_1 *dev,
     for (int i = 0; attributes[i] != HWC_DISPLAY_NO_ATTRIBUTE; i++) {
         if (disp == HWC_DISPLAY_PRIMARY) {
             values[i] = exynos4_fimd_attribute(pdev, attributes[i]);
-        }
-        else if (disp == HWC_DISPLAY_EXTERNAL) {
-        }
-        else {
+        } else if (disp == HWC_DISPLAY_EXTERNAL) {
+        } else {
             ALOGE("unknown display type %u", disp);
             return -EINVAL;
         }
@@ -1103,7 +1126,17 @@ static int exynos4_getDisplayAttributes(struct hwc_composer_device_1 *dev,
 }
 
 #if defined(BOARD_USES_HDMI)
-static void handle_hdmi_uevent(struct exynos4_hwc_composer_device_1_t *pdev, const char *buff, int len) {
+static void handle_hdmi_display_hotplug(struct exynos4_hwc_composer_hdmi_device_1_t *pdev, int hdmi_hpd) {
+        pdev->hdmi->setHdmiStatus(hdmi_hpd);
+        pdev->hdmi_hpd = hdmi_hpd;
+#ifdef BOARD_USES_HDMI_PRIMARY
+        pdev->base.procs->hotplug(pdev->base.procs, HWC_DISPLAY_PRIMARY, !!hdmi_hpd);
+#else
+        pdev->base.procs->hotplug(pdev->base.procs, HWC_DISPLAY_EXTERNAL, !!hdmi_hpd);
+#endif
+}
+
+static void handle_hdmi_uevent(struct exynos4_hwc_composer_hdmi_device_1_t *pdev, const char *buff, int len) {
     const char *s = buff;
     s += strlen(s) + 1;
 
@@ -1126,20 +1159,29 @@ static void handle_hdmi_uevent(struct exynos4_hwc_composer_device_1_t *pdev, con
 
     if (pdev->hdmi_hpd != hdmi_hpd) {
         ALOGI("Hdmi hpd changed %d -> %d", pdev->hdmi_hpd, hdmi_hpd);
-        pdev->hdmi_hpd = hdmi_hpd;
-        if (pdev->procs && pdev->procs->invalidate) {
-            pdev->procs->invalidate(pdev->procs);
-        }
+        handle_hdmi_display_hotplug(pdev, hdmi_hpd);
     }
 }
 
 static void* exynos4_hpd_thread(void *data) {
-    struct exynos4_hwc_composer_device_1_t *pdev =
-            (struct exynos4_hwc_composer_device_1_t *)data;
+    struct exynos4_hwc_composer_hdmi_device_1_t *pdev =
+            (struct exynos4_hwc_composer_hdmi_device_1_t *)data;
     char uevent_desc[4096];
     
     memset(uevent_desc, 0, sizeof(uevent_desc));
-    
+
+    int hpd_fd = open(HPD_DEV, O_RDONLY);
+    if (hpd_fd >= 0) {
+        int err = ioctl(hpd_fd, HPD_GET_STATE, &pdev->hdmi_hpd);
+        close(hpd_fd);
+        if (err < 0) {
+            ALOGE("unable to obtain hdmi hpd state: '%s', hdmi will not work", strerror(err));
+            return NULL;
+        } else if (pdev->hdmi_hpd == 1) {
+            handle_hdmi_display_hotplug(pdev, pdev->hdmi_hpd);
+        }
+    }
+
     uevent_init();
 
     while (true) {
@@ -1158,6 +1200,30 @@ static void* exynos4_hpd_thread(void *data) {
     
     return NULL;
 }
+
+static int exynos4_hdmi_open(struct exynos4_hwc_composer_device_1_t **device) {
+    struct exynos4_hwc_composer_hdmi_device_1_t *dev =
+            (struct exynos4_hwc_composer_hdmi_device_1_t *) malloc(sizeof(*dev));
+    memset(dev, 0, sizeof(*dev));
+
+    dev->hdmi = new android::SecTVOutService();
+    dev->hdmi_hpd = -1;
+
+    *device = (struct exynos4_hwc_composer_device_1_t *) dev;
+
+    return 0;
+}
+
+static int exynos4_hdmi_close(exynos4_hwc_composer_device_1_t *device) {
+    struct exynos4_hwc_composer_hdmi_device_1_t *dev =
+            (struct exynos4_hwc_composer_hdmi_device_1_t *) device;
+
+    pthread_kill(dev->hdmi_hpd_thread, SIGTERM);
+    pthread_join(dev->hdmi_hpd_thread, NULL);
+    delete dev->hdmi;
+
+    return 0;
+}
 #endif // end of BOARD_USES_HDMI
 
 static int exynos4_close(hw_device_t* device);
@@ -1167,7 +1233,6 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
 {
     int ret;
     int refreshRate;
-    int hpd_fd;
     struct fb_var_screeninfo const* info;
     struct hwc_win_info_t* win;
 
@@ -1176,8 +1241,16 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
     }
 
     struct exynos4_hwc_composer_device_1_t *dev;
+#ifdef BOARD_USES_HDMI
+    if (exynos4_hdmi_open(&dev) < 0) {
+        ALOGE("failed to open hdmi module");
+        ret = -EINVAL;
+        goto err_get_module;
+    }
+#else
     dev = (struct exynos4_hwc_composer_device_1_t *)malloc(sizeof(*dev));
     memset(dev, 0, sizeof(*dev));
+#endif
 
     if (hw_get_module(GRALLOC_HARDWARE_MODULE_ID,
             (const struct hw_module_t **)&dev->gralloc_module)) {
@@ -1210,10 +1283,6 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
     dev->xdpi = 1000 * dev->fb_device->xdpi;
     dev->ydpi = 1000 * dev->fb_device->ydpi;
     dev->vsync_period  = 1000000000 / refreshRate;
-#if defined(BOARD_USES_HDMI)
-    dev->hdmi = new SecTVOutService();
-    dev->hdmi_hpd = -1;
-#endif
 
     ALOGI("using (fd=%d)\n"
           "xres         = %d px\n"
@@ -1297,22 +1366,6 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
         goto err_open_overlay;
     }
 
-#if defined(BOARD_USES_HDMI)
-    hpd_fd = open(HPD_DEV, O_RDONLY);
-    if (hpd_fd >= 0) {
-        int err;
-        if ((err = ioctl(hpd_fd, HPD_GET_STATE, &dev->hdmi_hpd)) >= 0) {
-            err = pthread_create(&dev->hdmi_hpd_thread, NULL, exynos4_hpd_thread, dev);
-            if (err) {
-                ALOGW("unable to start hdmi hpd thread: '%s'", strerror(err));
-            }
-        } else {
-            ALOGW("unable to obtain hdmi hpd state: '%s', hdmi will not work", strerror(err));
-        }
-        close(hpd_fd);
-    }
-#endif
-
     char value[PROPERTY_VALUE_MAX];
     property_get("debug.hwc.force_gpu", value, "0");
     dev->force_gpu = atoi(value);
@@ -1347,8 +1400,11 @@ static int exynos4_close(hw_device_t *device)
     struct exynos4_hwc_composer_device_1_t *dev =
             (struct exynos4_hwc_composer_device_1_t *)device;
 
-    pthread_kill(dev->hdmi_hpd_thread, SIGTERM);
-    pthread_join(dev->hdmi_hpd_thread, NULL);
+#ifdef BOARD_USES_HDMI
+    if (exynos4_hdmi_close(dev) < 0) {
+        ALOGE("%s::exynos4_hdmi_close fail", __func__);
+    }
+#endif
 
     if (exynos4_vsync_deinit(dev) < 0) {
         ALOGE("%s::exynos4_vsync_deinit fail", __func__);
