@@ -66,11 +66,13 @@ struct exynos4_hwc_composer_hdmi_device_1_t {
     pthread_t                       hdmi_hpd_thread;
     android::SecTVOutService*       hdmi;
     int                             hdmi_hpd;
+    int                             hdmi_usage;
 };
 
 static void* exynos4_hpd_thread(void *data);
 #endif // end of BOARD_USES_HDMI
 
+#define MIN(a,b) (((a)<(b))?(a):(b))
 
 static void dump_handle(private_handle_t *h)
 {
@@ -650,14 +652,43 @@ static int exynos4_prepare_fimd(hwc_composer_device_1_t *dev,
 static int exynos4_prepare_hdmi(hwc_composer_device_1_t *dev,
         hwc_display_contents_1_t* contents)
 {
+#if defined(BOARD_USES_HDMI)
     exynos4_hwc_composer_hdmi_device_1_t *pdev =
             (exynos4_hwc_composer_hdmi_device_1_t *)dev;
+    hwc_layer_1_t *video_layer = NULL;
 
     //if geometry is not changed, there is no need to do any work here
     if (!contents || (!(contents->flags & HWC_GEOMETRY_CHANGED)))
         return 0;
 
-#if defined(BOARD_USES_HDMI)
+    for (size_t i = 0; i < contents->numHwLayers; i++) {
+        hwc_layer_1_t &layer = contents->hwLayers[i];
+        dump_layer(&layer);
+
+        if (layer.compositionType == HWC_FRAMEBUFFER_TARGET) {
+            ALOGV("layer %u: framebuffer target", i);
+            continue;
+        }
+
+        if (layer.compositionType == HWC_BACKGROUND) {
+            ALOGV("layer %u: background layer", i);
+            continue;
+        }
+
+        if (layer.handle && !video_layer) {
+            private_handle_t *h = private_handle_t::dynamicCast(layer.handle);
+            if (h->flags & GRALLOC_USAGE_PROTECTED) {
+                video_layer = &layer;
+                layer.compositionType = HWC_OVERLAY;
+                ALOGV("layer %u: video layer", i);
+                continue;
+            }
+        }
+
+        layer.compositionType = HWC_FRAMEBUFFER;
+        ALOGV("layer %u: framebuffer layer", i);
+    }
+
     pdev->hdmi->setHdmiHwcLayer(pdev->base.num_of_hwc_layer);
 #endif
 
@@ -673,7 +704,7 @@ static int exynos4_prepare(hwc_composer_device_1_t *dev,
         return 0;
 
 #ifdef BOARD_USES_HDMI_PRIMARY
-    hwc_display_contents_1_t *fimd_contents = NULL;
+    hwc_display_contents_1_t *fimd_contents = displays[HWC_DISPLAY_PRIMARY];
     hwc_display_contents_1_t *hdmi_contents = displays[HWC_DISPLAY_PRIMARY];
 #else
     hwc_display_contents_1_t *fimd_contents = displays[HWC_DISPLAY_PRIMARY];
@@ -704,15 +735,6 @@ static int exynos4_set_fimd(hwc_composer_device_1_t *dev,
 
     int skipped_window_mask = 0;
     int ret = 0;
-    struct sec_img src_img;
-    struct sec_img dst_img;
-    struct sec_rect src_work_rect;
-    struct sec_rect dst_work_rect;
-
-    memset(&src_img, 0, sizeof(src_img));
-    memset(&dst_img, 0, sizeof(dst_img));
-    memset(&src_work_rect, 0, sizeof(src_work_rect));
-    memset(&dst_work_rect, 0, sizeof(dst_work_rect));
 
     if (!contents) {
         //turn off the all windows
@@ -767,16 +789,6 @@ static int exynos4_set_fimd(hwc_composer_device_1_t *dev,
                     continue;
                 }
                 pdev->layer_prev_buf[i] = (uint32_t)cur->handle;
-                // initialize the src & dist context for fimc
-                set_src_dst_img_rect(cur, win, &src_img, &dst_img, &src_work_rect, &dst_work_rect, i);
-
-                ALOGV("%s:: Overlay runFimc!", __func__);
-                ret = runFimc(pdev, &src_img, &src_work_rect, &dst_img, &dst_work_rect, cur->transform);
-                if (ret < 0) {
-                    ALOGE("%s::runFimc fail : ret=%d\n", __func__, ret);
-                    skipped_window_mask |= (1 << i);
-                    continue;
-                }
 
                 window_pan_display(win);
 
@@ -792,8 +804,8 @@ static int exynos4_set_fimd(hwc_composer_device_1_t *dev,
         } else {
             ALOGE("%s:: error : window status should have "
                     "been HWC_WIN_RESERVED by now... ", __func__);
-             skipped_window_mask |= (1 << i);
-             continue;
+            skipped_window_mask |= (1 << i);
+            continue;
         }
     }
 
@@ -813,78 +825,116 @@ static int exynos4_set_fimd(hwc_composer_device_1_t *dev,
 static int exynos4_set_hdmi(hwc_composer_device_1_t *dev,
         hwc_display_contents_1_t* contents)
 {
-
     exynos4_hwc_composer_hdmi_device_1_t *pdev =
             (exynos4_hwc_composer_hdmi_device_1_t *)dev;
+    struct sec_img src_img, dst_img;
+    struct sec_rect src_work_rect, dst_work_rect;
 
-#if 0
-    if (pdev->num_of_hwc_layer == 1) {
-        struct hwc_win_info_t *win = &pdev->win[0];
-        hwc_layer_1_t *cur = &contents->hwLayers[win->layer_index];
-        LOGE("%s, cur->tran:%d \n", __func__, cur->transform);
+    if (pdev->hdmi_hpd != 1) {
+        for (size_t i = 0; i < contents->numHwLayers; i++) {
+            hwc_layer_1_t &layer = contents->hwLayers[i];
+            if (layer.acquireFenceFd != -1) {
+                close(layer.acquireFenceFd);
+                layer.acquireFenceFd = -1;
+            }
+        }
+        return 0;
+    }
+
+    for (size_t i = 0; i < MIN(contents->numHwLayers, NUM_OF_WIN); i++) {
+        hwc_win_info_t *win = &pdev->base.win[i];
+        hwc_layer_1_t &layer = contents->hwLayers[win->layer_index];
+
+        if (layer.flags & HWC_SKIP_LAYER || !layer.handle) {
+            ALOGW("HDMI skipping layer %d", i);
+            continue;
+        }
+
+        if (layer.compositionType == HWC_OVERLAY) {
+            ALOGV("HDMI video layer:");
+            dump_layer(&layer);
+
+            memset(&src_img, 0, sizeof(src_img));
+            memset(&dst_img, 0, sizeof(dst_img));
+            memset(&src_work_rect, 0, sizeof(src_work_rect));
+            memset(&dst_work_rect, 0, sizeof(dst_work_rect));
+
+            // initialize the src & dist context for fimc
+            set_src_dst_img_rect(&layer, win, &src_img, &dst_img, &src_work_rect, &dst_work_rect, i);
+
+            int ret = runFimc(&pdev->base, &src_img, &src_work_rect, &dst_img, &dst_work_rect, layer.transform);
+            if (ret < 0) {
+                ALOGE("FIMC failed: ret=%d for window %d\n", ret, i);
+                continue;
+            }
 
 #if 1 //added yqf, for flip ops for TV flush with camera preview by front camera  on TC4
-        if ((cur->transform == HAL_TRANSFORM_FLIP_H) || (cur->transform == (HAL_TRANSFORM_FLIP_H | HAL_TRANSFORM_ROT_90)) )
-            hdmi->setHdmiFlip(1, pdev->num_of_hwc_layer); //hflip
-        else if((cur->transform == HAL_TRANSFORM_FLIP_V) || (cur->transform == (HAL_TRANSFORM_FLIP_V | HAL_TRANSFORM_ROT_90)) )
-            hdmi->setHdmiFlip(2, pdev->num_of_hwc_layer); //vflip
-        else
-        hdmi->setHdmiFlip(0, pdev->num_of_hwc_layer); //none flip
+            if ((layer.transform == HAL_TRANSFORM_FLIP_H) || (layer.transform == (HAL_TRANSFORM_FLIP_H | HAL_TRANSFORM_ROT_90)) )
+                pdev->hdmi->setHdmiFlip(1, pdev->base.num_of_hwc_layer); //hflip
+            else if((layer.transform == HAL_TRANSFORM_FLIP_V) || (layer.transform == (HAL_TRANSFORM_FLIP_V | HAL_TRANSFORM_ROT_90)) )
+                pdev->hdmi->setHdmiFlip(2, pdev->base.num_of_hwc_layer); //vflip
+            else
+                pdev->hdmi->setHdmiFlip(0, pdev->base.num_of_hwc_layer); //none flip
 #endif
 
-        // To support S3D video playback (automatic TV mode change to 3D mode)
-        if (src_img.usage != prev_usage) {
-            hdmi->setHdmiResolution(DEFAULT_HDMI_RESOLUTION_VALUE);    // V4L2_STD_1080P_60
-        }
-
-        if ((src_img.usage & GRALLOC_USAGE_PRIVATE_SBS_LR) || (src_img.usage & GRALLOC_USAGE_PRIVATE_SBS_RL)) {
-            hdmi->setHdmiResolution(7209601);    // V4L2_STD_TVOUT_720P_60_SBS_HALF
-        } else if ((src_img.usage & GRALLOC_USAGE_PRIVATE_TB_LR) || (src_img.usage & GRALLOC_USAGE_PRIVATE_TB_RL)) {
-            hdmi->setHdmiResolution(1080924);    // V4L2_STD_TVOUT_1080P_24_TB
-            prev_usage = src_img.usage;
-        } else {
-            if ((prev_usage & GRALLOC_USAGE_PRIVATE_SBS_LR) ||
-                    (prev_usage & GRALLOC_USAGE_PRIVATE_SBS_RL) ||
-                    (prev_usage & GRALLOC_USAGE_PRIVATE_TB_LR) ||
-                    (prev_usage & GRALLOC_USAGE_PRIVATE_TB_RL)) {
-                hdmi->setHdmiResolution(DEFAULT_HDMI_RESOLUTION_VALUE);    // V4L2_STD_1080P_60
+            // To support S3D video playback (automatic TV mode change to 3D mode)
+            if (pdev->base.num_of_hwc_layer == 1) {
+                if (src_img.usage != pdev->hdmi_usage) {
+                    pdev->hdmi->setHdmiResolution(DEFAULT_HDMI_RESOLUTION_VALUE);    // V4L2_STD_1080P_60
+                }
+                if ((src_img.usage & GRALLOC_USAGE_PRIVATE_SBS_LR) || (src_img.usage & GRALLOC_USAGE_PRIVATE_SBS_RL)) {
+                    pdev->hdmi->setHdmiResolution(7209601);    // V4L2_STD_TVOUT_720P_60_SBS_HALF
+                } else if ((src_img.usage & GRALLOC_USAGE_PRIVATE_TB_LR) || (src_img.usage & GRALLOC_USAGE_PRIVATE_TB_RL)) {
+                    pdev->hdmi->setHdmiResolution(1080924);    // V4L2_STD_TVOUT_1080P_24_TB
+                }
+                pdev->hdmi_usage = src_img.usage;
+            } else {
+                if ((pdev->hdmi_usage & GRALLOC_USAGE_PRIVATE_SBS_LR) ||
+                        (pdev->hdmi_usage & GRALLOC_USAGE_PRIVATE_SBS_RL) ||
+                        (pdev->hdmi_usage & GRALLOC_USAGE_PRIVATE_TB_LR) ||
+                        (pdev->hdmi_usage & GRALLOC_USAGE_PRIVATE_TB_RL)) {
+                    pdev->hdmi->setHdmiResolution(DEFAULT_HDMI_RESOLUTION_VALUE);    // V4L2_STD_1080P_60
+                }
+                pdev->hdmi_usage = 0;
             }
-            prev_usage = 0;
+
+            if ((src_img.format == HAL_PIXEL_FORMAT_CUSTOM_YCbCr_420_SP_TILED) ||
+                    (src_img.format == HAL_PIXEL_FORMAT_CUSTOM_YCrCb_420_SP)) {
+                ADDRS * addr = (ADDRS *)(src_img.base);
+                pdev->hdmi->blit2Hdmi(src_img.w, src_img.h,
+                                src_img.format,
+                                (unsigned int)addr->addr_y, (unsigned int)addr->addr_cbcr, (unsigned int)addr->addr_cbcr,
+                                0, 0,
+                                android::SecHdmiClient::HDMI_MODE_VIDEO,
+                                pdev->base.num_of_hwc_layer);
+            } else if ((src_img.format == HAL_PIXEL_FORMAT_YCbCr_420_SP) ||
+                    (src_img.format == HAL_PIXEL_FORMAT_YCrCb_420_SP) ||
+                    (src_img.format == HAL_PIXEL_FORMAT_YCbCr_420_P) ||
+                    (src_img.format == HAL_PIXEL_FORMAT_YV12)) {
+                pdev->hdmi->blit2Hdmi(src_img.w, src_img.h,
+                                src_img.format,
+                                (unsigned int)pdev->base.fimc.params.src.buf_addr_phy_rgb_y,
+                                (unsigned int)pdev->base.fimc.params.src.buf_addr_phy_cb,
+                                (unsigned int)pdev->base.fimc.params.src.buf_addr_phy_cr,
+                                0, 0,
+                                android::SecHdmiClient::HDMI_MODE_VIDEO,
+                                pdev->base.num_of_hwc_layer);
+            } else {
+                ALOGE("%s: Unsupported format = %d", __func__, src_img.format);
+            }
         }
 
-        if ((src_img.format == HAL_PIXEL_FORMAT_CUSTOM_YCbCr_420_SP_TILED) ||
-                (src_img.format == HAL_PIXEL_FORMAT_CUSTOM_YCrCb_420_SP)) {
-            ADDRS * addr = (ADDRS *)(src_img.base);
-            hdmi->blit2Hdmi(src_img.w, src_img.h,
-                            src_img.format,
-                            (unsigned int)addr->addr_y, (unsigned int)addr->addr_cbcr, (unsigned int)addr->addr_cbcr,
-                            0, 0,
-                            android::SecHdmiClient::HDMI_MODE_VIDEO,
-                            pdev->num_of_hwc_layer);
-        } else if ((src_img.format == HAL_PIXEL_FORMAT_YCbCr_420_SP) ||
-                (src_img.format == HAL_PIXEL_FORMAT_YCrCb_420_SP) ||
-                (src_img.format == HAL_PIXEL_FORMAT_YCbCr_420_P) ||
-                (src_img.format == HAL_PIXEL_FORMAT_YV12)) {
-            hdmi->blit2Hdmi(src_img.w, src_img.h,
-                            src_img.format,
-                            (unsigned int)pdev->fimc.params.src.buf_addr_phy_rgb_y,
-                            (unsigned int)pdev->fimc.params.src.buf_addr_phy_cb,
-                            (unsigned int)pdev->fimc.params.src.buf_addr_phy_cr,
-                            0, 0,
-                            android::SecHdmiClient::HDMI_MODE_VIDEO,
-                            pdev->num_of_hwc_layer);
-        } else {
-            ALOGE("%s: Unsupported format = %d", __func__, src_img.format);
+        if (layer.compositionType == HWC_FRAMEBUFFER || layer.compositionType == HWC_FRAMEBUFFER_TARGET) {
+            //ALOGV("HDMI FB layer:");
+            //dump_layer(&layer);
+            pdev->hdmi->blit2Hdmi(pdev->base.xres, pdev->base.yres,
+                    HAL_PIXEL_FORMAT_BGRA_8888,
+                    0, 0, 0,
+                    0, 0,
+                    android::SecHdmiClient::HDMI_MODE_UI,
+                    0);
         }
     }
-#endif
-
-    pdev->hdmi->blit2Hdmi(pdev->base.xres, pdev->base.yres,
-            HAL_PIXEL_FORMAT_BGRA_8888,
-            0, 0, 0,
-            0, 0,
-            android::SecHdmiClient::HDMI_MODE_UI,
-            0);
 
     return 0;
 }
@@ -898,7 +948,7 @@ static int exynos4_set(struct hwc_composer_device_1 *dev,
         return 0;
 
 #ifdef BOARD_USES_HDMI_PRIMARY
-    hwc_display_contents_1_t *fimd_contents = NULL;
+    hwc_display_contents_1_t *fimd_contents = displays[HWC_DISPLAY_PRIMARY];
     hwc_display_contents_1_t *hdmi_contents = displays[HWC_DISPLAY_PRIMARY];
 #else
     hwc_display_contents_1_t *fimd_contents = displays[HWC_DISPLAY_PRIMARY];
@@ -1127,12 +1177,12 @@ static int exynos4_getDisplayAttributes(struct hwc_composer_device_1 *dev,
 
 #if defined(BOARD_USES_HDMI)
 static void handle_hdmi_display_hotplug(struct exynos4_hwc_composer_hdmi_device_1_t *pdev, int hdmi_hpd) {
-        pdev->hdmi->setHdmiStatus(hdmi_hpd);
-        pdev->hdmi_hpd = hdmi_hpd;
+    pdev->hdmi->setHdmiStatus(hdmi_hpd);
+    pdev->hdmi_hpd = hdmi_hpd;
 #ifdef BOARD_USES_HDMI_PRIMARY
-        pdev->base.procs->hotplug(pdev->base.procs, HWC_DISPLAY_PRIMARY, !!hdmi_hpd);
+    pdev->base.procs->hotplug(pdev->base.procs, HWC_DISPLAY_PRIMARY, !!hdmi_hpd);
 #else
-        pdev->base.procs->hotplug(pdev->base.procs, HWC_DISPLAY_EXTERNAL, !!hdmi_hpd);
+    pdev->base.procs->hotplug(pdev->base.procs, HWC_DISPLAY_EXTERNAL, !!hdmi_hpd);
 #endif
 }
 
@@ -1208,6 +1258,7 @@ static int exynos4_hdmi_open(struct exynos4_hwc_composer_device_1_t **device) {
 
     dev->hdmi = new android::SecTVOutService();
     dev->hdmi_hpd = -1;
+    dev->hdmi_usage = 0;
 
     *device = (struct exynos4_hwc_composer_device_1_t *) dev;
 
@@ -1371,7 +1422,7 @@ static int exynos4_open(const struct hw_module_t *module, const char *name,
     dev->force_gpu = atoi(value);
 
     return 0;
-    
+
 err_open_overlay:
     if (destroyFimc(&dev->fimc) < 0)
         ALOGE("%s::destroyFimc() fail", __func__);
@@ -1391,7 +1442,7 @@ err_open_fb:
     gralloc_close(dev->alloc_device);
 err_get_module:
     free(dev);
-    
+
     return ret;
 }
 
