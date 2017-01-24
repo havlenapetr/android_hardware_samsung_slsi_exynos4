@@ -252,13 +252,6 @@ static int delay_cnt=0;
 
             mHdmiCableInserted = hdmiCableInserted;
         }
-
-        if (hdmiCableInserted() == true){
-	   if(mHwcLayer)
-	   	this->blit2Hdmi(width, height, colorformat, phyYAddr, phyCbAddr, phyCrAddr, 0, 0, HDMI_MODE_VIDEO, 0); //added yqf, for connect when video pause
-	   else
-              this->blit2Hdmi(mLCD_width, mLCD_height, HAL_PIXEL_FORMAT_BGRA_8888, 0, 0, 0, 0, 0, HDMI_MODE_UI, 0);
-        	}
     }
 
     void SecTVOutService::setHdmiMode(uint32_t mode)

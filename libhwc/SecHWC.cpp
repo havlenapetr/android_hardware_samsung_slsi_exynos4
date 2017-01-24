@@ -44,17 +44,10 @@
 #include <hardware/gralloc.h>
 #include <hardware/hardware.h>
 #include <hardware/hwcomposer.h>
-#include <hardware_legacy/uevent.h>
-#include <utils/String8.h>
-#include <utils/Vector.h>
 
 #include <sync/sync.h>
 
-//#include "ion.h"
 #include "gralloc_priv.h"
-//#include "exynos_fimc.h"
-//#include "exynos_format.h"
-//#include "exynos_v4l2.h"
 #include "s5p_tvout_v4l2.h"
 
 #if defined(BOARD_USES_HDMI)
@@ -64,15 +57,19 @@
 struct exynos4_hwc_composer_hdmi_device_1_t {
     exynos4_hwc_composer_device_1_t base;
     pthread_t                       hdmi_hpd_thread;
+    pthread_mutex_t                 hdmi_lock;
     android::SecTVOutService*       hdmi;
-    int                             hdmi_hpd;
+    // hpd state used in hwc render thread
+    volatile int                    hdmi_hpd;
+    // hpd state used in hpd check thread
+    volatile int                    hdmi_hpd_cur;
+    volatile bool                   hdmi_restart;
     int                             hdmi_usage;
 };
 
 static void* exynos4_hpd_thread(void *data);
+static void exynos4_check_hpd(exynos4_hwc_composer_hdmi_device_1_t *dev);
 #endif // end of BOARD_USES_HDMI
-
-#define MIN(a,b) (((a)<(b))?(a):(b))
 
 static void dump_handle(private_handle_t *h)
 {
@@ -825,28 +822,29 @@ static int exynos4_set_fimd(hwc_composer_device_1_t *dev,
 static int exynos4_set_hdmi(hwc_composer_device_1_t *dev,
         hwc_display_contents_1_t* contents)
 {
+#ifdef BOARD_USES_HDMI_PRIMARY
     exynos4_hwc_composer_hdmi_device_1_t *pdev =
             (exynos4_hwc_composer_hdmi_device_1_t *)dev;
     struct sec_img src_img, dst_img;
     struct sec_rect src_work_rect, dst_work_rect;
 
-    if (pdev->hdmi_hpd != 1) {
-        for (size_t i = 0; i < contents->numHwLayers; i++) {
-            hwc_layer_1_t &layer = contents->hwLayers[i];
-            if (layer.acquireFenceFd != -1) {
-                close(layer.acquireFenceFd);
-                layer.acquireFenceFd = -1;
-            }
-        }
-        return 0;
-    }
-
-    for (size_t i = 0; i < MIN(contents->numHwLayers, NUM_OF_WIN); i++) {
+    for (size_t i = 0; i < SEC_MIN(contents->numHwLayers, NUM_OF_WIN); i++) {
         hwc_win_info_t *win = &pdev->base.win[i];
         hwc_layer_1_t &layer = contents->hwLayers[win->layer_index];
 
         if (layer.flags & HWC_SKIP_LAYER || !layer.handle) {
             ALOGW("HDMI skipping layer %d", i);
+            continue;
+        }
+
+	exynos4_check_hpd(pdev);
+	if (!pdev->hdmi_hpd) {
+            ALOGI("HDMI ignoring layer %d (cable disconnected)", i);
+            dump_layer(&layer);
+            if (layer.acquireFenceFd != -1) {
+                close(layer.acquireFenceFd);
+                layer.acquireFenceFd = -1;
+            }
             continue;
         }
 
@@ -924,7 +922,7 @@ static int exynos4_set_hdmi(hwc_composer_device_1_t *dev,
             }
         }
 
-        if (layer.compositionType == HWC_FRAMEBUFFER || layer.compositionType == HWC_FRAMEBUFFER_TARGET) {
+        if (layer.compositionType == HWC_FRAMEBUFFER) {
             //ALOGV("HDMI FB layer:");
             //dump_layer(&layer);
             pdev->hdmi->blit2Hdmi(pdev->base.xres, pdev->base.yres,
@@ -935,7 +933,7 @@ static int exynos4_set_hdmi(hwc_composer_device_1_t *dev,
                     0);
         }
     }
-
+#endif // end of BOARD_USES_HDMI_PRIMARY
     return 0;
 }
 
@@ -971,26 +969,16 @@ static int exynos4_set(struct hwc_composer_device_1 *dev,
 static void exynos4_registerProcs(struct hwc_composer_device_1* dev,
         hwc_procs_t const* procs)
 {
-#ifdef BOARD_USES_HDMI
-    struct exynos4_hwc_composer_hdmi_device_1_t* pdev =
-            (struct exynos4_hwc_composer_hdmi_device_1_t*)dev;
-    pdev->base.procs = procs;
-
-    int err = pthread_create(&pdev->hdmi_hpd_thread, NULL, exynos4_hpd_thread, pdev);
-    if (err) {
-        ALOGW("unable to start hdmi hpd thread: '%s'", strerror(err));
-    }
-
-#ifndef BOARD_USES_HDMI_PRIMARY
-    if (pdev->procs && pdev->hdmi_hpd) {
-        pdev->procs->hotplug(pdev->procs, HWC_DISPLAY_EXTERNAL, true);
-        //pdev->procs->invalidate(pdev->procs);
-    }
-#endif
-#else
     struct exynos4_hwc_composer_device_1_t* pdev =
             (struct exynos4_hwc_composer_device_1_t*)dev;
     pdev->procs = procs;
+
+#ifdef BOARD_USES_HDMI
+    int err = pthread_create(&((struct exynos4_hwc_composer_hdmi_device_1_t*)pdev)->hdmi_hpd_thread,
+            NULL, exynos4_hpd_thread, pdev);
+    if (err) {
+        ALOGE("unable to start hdmi hpd thread: '%s'", strerror(err));
+    }
 #endif
 }
 
@@ -1037,7 +1025,7 @@ static int exynos4_blank(struct hwc_composer_device_1 *dev, int disp, int blank)
     switch (disp) {
     case HWC_DISPLAY_PRIMARY: {
         int fb_blank = blank ? FB_BLANK_POWERDOWN : FB_BLANK_UNBLANK;
-        int err = 0; //ioctl(pdev->fd, FBIOBLANK, fb_blank);    //wjj closed until kernel 3.0 blank api is correct.
+        int err = 0; //ioctl(pdev->fd, FBIOBLANK, fb_blank);
         if (err < 0) {
             if (errno == EBUSY)
                 ALOGI("%sblank ioctl failed (display already %sblanked)",
@@ -1068,10 +1056,9 @@ static void exynos4_dump(hwc_composer_device_1* dev, char *buff, int buff_len)
 
     struct exynos4_hwc_composer_device_1_t *pdev =
             (struct exynos4_hwc_composer_device_1_t *)dev;
-
+/*
     android::String8 result;
 
-    /*
     for (size_t i = 0; i < NUM_HW_WINDOWS; i++) {
         struct s3c_fb_win_config &config = pdev->last_config[i];
         if (config.state == config.S3C_FB_WIN_STATE_DISABLED) {
@@ -1100,8 +1087,8 @@ static void exynos4_dump(hwc_composer_device_1* dev, char *buff, int buff_len)
 
         result.append("\n");
     }
-    */
     strlcpy(buff, result.string(), buff_len);
+*/
 }
 
 static int exynos4_getDisplayConfigs(struct hwc_composer_device_1 *dev,
@@ -1176,9 +1163,34 @@ static int exynos4_getDisplayAttributes(struct hwc_composer_device_1 *dev,
 }
 
 #if defined(BOARD_USES_HDMI)
+static void exynos4_check_hpd(exynos4_hwc_composer_hdmi_device_1_t *dev) {
+    pthread_mutex_lock(&dev->hdmi_lock);
+    if (dev->hdmi_hpd == dev->hdmi_hpd_cur && !dev->hdmi_restart) {
+        pthread_mutex_unlock(&dev->hdmi_lock);
+        return;
+    }
+    bool cable_disconnected = !dev->hdmi_hpd_cur && dev->hdmi_hpd;
+    if (cable_disconnected || dev->hdmi_restart) {
+        LOGI("disabling hdmi connection");
+        dev->hdmi->setHdmiStatus(0);
+    }
+    bool cable_connected = dev->hdmi_hpd_cur && !dev->hdmi_hpd;
+    if (cable_connected || dev->hdmi_restart) {
+        LOGI("enabling hdmi connection");
+        dev->hdmi->setHdmiStatus(1);
+    }
+    dev->hdmi_hpd = dev->hdmi_hpd_cur;
+    dev->hdmi_restart = false;
+    pthread_mutex_unlock(&dev->hdmi_lock);
+}
+
 static void handle_hdmi_display_hotplug(struct exynos4_hwc_composer_hdmi_device_1_t *pdev, int hdmi_hpd) {
-    pdev->hdmi->setHdmiStatus(hdmi_hpd);
-    pdev->hdmi_hpd = hdmi_hpd;
+    pthread_mutex_lock(&pdev->hdmi_lock);
+    if (pdev->hdmi_hpd && !pdev->hdmi_hpd_cur && hdmi_hpd) {
+        pdev->hdmi_restart = true;
+    }
+    pdev->hdmi_hpd_cur = hdmi_hpd;
+    pthread_mutex_unlock(&pdev->hdmi_lock);
 #ifdef BOARD_USES_HDMI_PRIMARY
     pdev->base.procs->hotplug(pdev->base.procs, HWC_DISPLAY_PRIMARY, !!hdmi_hpd);
 #else
@@ -1186,68 +1198,41 @@ static void handle_hdmi_display_hotplug(struct exynos4_hwc_composer_hdmi_device_
 #endif
 }
 
-static void handle_hdmi_uevent(struct exynos4_hwc_composer_hdmi_device_1_t *pdev, const char *buff, int len) {
-    const char *s = buff;
-    s += strlen(s) + 1;
-
-    int hdmi_hpd = -1;
-    while (*s) {
-        if (!strncmp(s, "HDMI_STATE=", strlen("HDMI_STATE="))) {
-            s += strlen("HDMI_STATE=");
-            if (!strncmp(s, "online", strlen("online"))) {
-                hdmi_hpd = 1;
-            } else if (!strncmp(s, "offline", strlen("offline"))) {
-                hdmi_hpd = 0;
-            }
-            break;
-        }
-
-        s += strlen(s) + 1;
-        if (s - buff >= len)
-            break;
-    }
-
-    if (pdev->hdmi_hpd != hdmi_hpd) {
-        ALOGI("Hdmi hpd changed %d -> %d", pdev->hdmi_hpd, hdmi_hpd);
-        handle_hdmi_display_hotplug(pdev, hdmi_hpd);
-    }
-}
-
 static void* exynos4_hpd_thread(void *data) {
     struct exynos4_hwc_composer_hdmi_device_1_t *pdev =
             (struct exynos4_hwc_composer_hdmi_device_1_t *)data;
-    char uevent_desc[4096];
-    
-    memset(uevent_desc, 0, sizeof(uevent_desc));
+    struct pollfd fds[1];
+    char buf[1];
 
-    int hpd_fd = open(HPD_DEV, O_RDONLY);
-    if (hpd_fd >= 0) {
-        int err = ioctl(hpd_fd, HPD_GET_STATE, &pdev->hdmi_hpd);
-        close(hpd_fd);
-        if (err < 0) {
-            ALOGE("unable to obtain hdmi hpd state: '%s', hdmi will not work", strerror(err));
-            return NULL;
-        } else if (pdev->hdmi_hpd == 1) {
-            handle_hdmi_display_hotplug(pdev, pdev->hdmi_hpd);
-        }
+    fds[0].fd = open(HPD_DEV, O_RDONLY);
+    if (fds[0].fd < 0) {
+        LOGE("Unable to open HPD device '%s'", strerror(errno));
+        return NULL;
     }
-
-    uevent_init();
+    fds[0].events = POLLRDNORM;
 
     while (true) {
-        int len = uevent_next_event(uevent_desc, sizeof(uevent_desc) - 2);
-        if (len == -1) {
+        int err = poll(fds, 1, -1);
+        if (err > 0 && fds[0].revents & POLLRDNORM) {
+            err = read(fds[0].fd, buf, sizeof(buf));
+            if (err < 0) {
+                LOGW("Unable to read hpd state");
+                continue;
+            }
+
+            int hdmi_hpd = (int) buf[0];
+            if (pdev->hdmi_hpd_cur != hdmi_hpd) {
+                ALOGI("Hdmi hpd changed %d -> %d", pdev->hdmi_hpd, hdmi_hpd);
+                handle_hdmi_display_hotplug(pdev, hdmi_hpd);
+            }
+        } else if (err == -1) {
             if (errno == EINTR)
                 break;
             ALOGE("error in hpd thread: %s", strerror(errno));
         }
-
-        bool hdmi = !strcmp(uevent_desc, "change@/devices/virtual/misc/HPD");
-        if (hdmi) {
-            handle_hdmi_uevent(pdev, uevent_desc, len);
-        }
     }
-    
+
+    close(fds[0].fd);
     return NULL;
 }
 
@@ -1257,8 +1242,10 @@ static int exynos4_hdmi_open(struct exynos4_hwc_composer_device_1_t **device) {
     memset(dev, 0, sizeof(*dev));
 
     dev->hdmi = new android::SecTVOutService();
-    dev->hdmi_hpd = -1;
+    dev->hdmi_hpd = dev->hdmi_hpd_cur = 0;
+    dev->hdmi_restart = false;
     dev->hdmi_usage = 0;
+    pthread_mutex_init(&dev->hdmi_lock, NULL);
 
     *device = (struct exynos4_hwc_composer_device_1_t *) dev;
 
@@ -1271,6 +1258,7 @@ static int exynos4_hdmi_close(exynos4_hwc_composer_device_1_t *device) {
 
     pthread_kill(dev->hdmi_hpd_thread, SIGTERM);
     pthread_join(dev->hdmi_hpd_thread, NULL);
+    pthread_mutex_destroy(&dev->hdmi_lock);
     delete dev->hdmi;
 
     return 0;
